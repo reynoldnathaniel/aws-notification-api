@@ -1,0 +1,167 @@
+Transform: AWS::Serverless-2016-10-31
+Resources:
+  NotificationApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: !Sub
+        - ${ResourceName} From Stack ${AWS::StackName}
+        - ResourceName: NotificationApi
+      StageName: Prod
+      DefinitionBody:
+        openapi: '3.0'
+        info: {}
+        paths:
+          /all_notification:
+            post:
+              x-amazon-apigateway-integration:
+                credentials: !GetAtt NotificationApiQueuesendmessageRole.Arn
+                httpMethod: POST
+                type: aws
+                uri: !Sub arn:${AWS::Partition}:apigateway:${AWS::Region}:sqs:path/${AWS::AccountId}/${NotificationQueue.QueueName}
+                requestParameters:
+                  integration.request.header.Content-Type: '''application/x-www-form-urlencoded'''
+                requestTemplates:
+                  application/json: Action=SendMessage&MessageBody={"data":$input.body}
+                responses:
+                  default:
+                    statusCode: 200
+              responses:
+                '200':
+                  description: 200 response
+      EndpointConfiguration: EDGE
+      TracingEnabled: true
+      Cors:
+        AllowOrigin: '''*'''
+        AllowHeaders: '''Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'''
+        AllowMethods: '''POST, OPTIONS'''
+  NotificationApiQueuesendmessageRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action:
+              - sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+                - apigateway.amazonaws.com
+        Version: '2012-10-17'
+      Path: /
+      Policies:
+        - PolicyDocument:
+            Statement:
+              - Action: sqs:SendMessage
+                Effect: Allow
+                Resource: !GetAtt NotificationQueue.Arn
+            Version: '2012-10-17'
+          PolicyName: NotificationApiQueuesendmessagePolicy
+  ExecuteNotificationStateMachine:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: !Sub
+        - Stack ${AWS::StackName} Function ${ResourceName}
+        - ResourceName: ExecuteNotificationStateMachine
+      CodeUri: src/ExecuteNotificationStateMachine
+      Handler: handler.handler
+      Runtime: python3.9
+      MemorySize: 128
+      Timeout: 30
+      Tracing: Active
+      Events:
+        NotificationQueue:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt NotificationQueue.Arn
+            BatchSize: 1
+      Environment:
+        Variables:
+          STATE_MACHINE_NAME: !GetAtt NotificationStateMachine.Name
+          STATE_MACHINE_ARN: !Ref NotificationStateMachine
+          DEFAULT_TARGET_EMAIL: reynold@megazone.com
+          DEFAULT_SOURCE_EMAIL: noreply@mzc-hk-demo.com
+          DEFAULT_TARGET_NUMBER: +85251696808
+          DEFAULT_SOURCE_NUMBER: +12363012337
+      Policies:
+        - StepFunctionsExecutionPolicy:
+            StateMachineName: !GetAtt NotificationStateMachine.Name
+      Architectures:
+        - arm64
+  ExecuteNotificationStateMachineLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${ExecuteNotificationStateMachine}
+  NotificationStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      DefinitionUri: state_machine/NotificationStartStateMachine.asl.json
+      Logging:
+        Level: ALL
+        IncludeExecutionData: true
+        Destinations:
+          - CloudWatchLogsLogGroup:
+              LogGroupArn: !GetAtt NotificationStateMachineLogGroup.Arn
+      Policies:
+        - AWSXrayWriteOnlyAccess
+        - Statement:
+            - Effect: Allow
+              Action:
+                - logs:CreateLogDelivery
+                - logs:GetLogDelivery
+                - logs:UpdateLogDelivery
+                - logs:DeleteLogDelivery
+                - logs:ListLogDeliveries
+                - logs:PutResourcePolicy
+                - logs:DescribeResourcePolicies
+                - logs:DescribeLogGroups
+                - states:StartExecution
+                - states:StartSyncExecution
+                - events:PutTargets
+                - events:PutRule
+                - events:DescribeRule
+              Resource: '*'
+      Tracing:
+        Enabled: true
+      Type: STANDARD
+  NotificationStateMachineLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub
+        - /aws/vendedlogs/states/${AWS::StackName}-${ResourceId}-Logs
+        - ResourceId: NotificationStateMachine
+  NotificationQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      MessageRetentionPeriod: 345600
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt NotificationDLQ.Arn
+        maxReceiveCount: 5
+  NotificationDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      MessageRetentionPeriod: 345600
+  NotificationDLQLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: !Sub
+        - Stack ${AWS::StackName} Function ${ResourceName}
+        - ResourceName: NotificationDLQLambda
+      CodeUri: src/NotificationDLQLambda
+      Handler: handler.handler
+      Runtime: python3.9
+      MemorySize: 128
+      Timeout: 30
+      Tracing: Active
+      Events:
+        NotificationDLQ:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt NotificationDLQ.Arn
+            BatchSize: 1
+      Architectures:
+        - arm64
+  NotificationDLQLambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${NotificationDLQLambda}

@@ -1,0 +1,5 @@
+/.aws-sam
+/.aws-composer
+*samconfig*.toml
+/notes
+*notes.txt

@@ -1,0 +1,50 @@
+{
+  "Comment": "A description of my state machine",
+  "StartAt": "Run Prowler and Inventory List",
+  "States": {
+    "Run Prowler and Inventory List": {
+      "Type": "Parallel",
+      "Branches": [
+        {
+          "StartAt": "CodeBuild StartBuild - Prowler",
+          "States": {
+            "CodeBuild StartBuild - Prowler": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::codebuild:startBuild.sync",
+              "Parameters": {
+                "ProjectName": "ProwlerCodeBuild-gzEC7MADM5ic",
+                "EnvironmentVariablesOverride": [
+                  {
+                    "Name": "SSM_VALUE",
+                    "Value.$": "$.ssm_path",
+                    "Type": "PARAMETER_STORE"
+                  }
+                ]
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "Pass",
+          "States": {
+            "Pass": {
+              "Type": "Pass",
+              "End": true
+            }
+          }
+        }
+      ],
+      "Next": "DeleteParameters",
+      "ResultPath": null
+    },
+    "DeleteParameters": {
+      "Type": "Task",
+      "End": true,
+      "Parameters": {
+        "Names.$": "States.Array($.ssm_path)"
+      },
+      "Resource": "arn:aws:states:::aws-sdk:ssm:deleteParameters"
+    }
+  }
+}
